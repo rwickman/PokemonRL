@@ -37,10 +37,10 @@ class CNNValueNetwork(nn.Module):
         self,
         state_dim,
         action_dim: int,
-        out_channels: list[int] = [16, 16, 16],
+        out_channels: list[int] = [32, 64, 64],
         kernel_sizes=[4, 3, 4],
-        strides=[2, 2, 2],
-        linear_hidden_size: int = 32):
+        strides=[4, 2, 2],
+        linear_hidden_size: int = 64):
 
         super().__init__()
         feature_layers = []
@@ -64,9 +64,9 @@ class CNNValueNetwork(nn.Module):
             cnn_out_dim = int(self.features(torch.randn(1, *state_dim)).shape[-1])
             print("cnn_out_dim", cnn_out_dim)
         self.out = nn.Sequential(
-            nn.Linear(cnn_out_dim, action_dim),
-            # nn.LeakyReLU(inplace=True),
-            # nn.Linear(linear_hidden_size, action_dim)
+            nn.Linear(cnn_out_dim, linear_hidden_size),
+            nn.LeakyReLU(inplace=True),
+            nn.Linear(linear_hidden_size, action_dim)
         )
 
         feature_params = sum(p.numel() for p in self.features.parameters())
@@ -123,7 +123,8 @@ class DQN(nn.Module):
         q_vals = q_vals_matrix.gather(1, actions.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
-            next_actions = self.q_net(states).argmax(dim=-1)
+            next_actions = self.q_net(next_states).argmax(dim=-1)
+
             # Get the next actions            
             q_next_target  = self.q_net_tgt(next_states)
 
