@@ -24,8 +24,9 @@ start_time = time.time()
 #     #         pyboy.save_state(f)
 #     #         print("SAVING STATE")
 #     pass
+env = GenericPyBoyEnv(pyboy)
 for i in range(100000000):
-    env = GenericPyBoyEnv(pyboy)
+    
     observation, reward, done, truncated, info = env.step(0)
     # obs_downsampled_resize = resize(observation, (72, 80))
     # obs_downsampled_mean = downscale_local_mean(observation, (2, 2))

@@ -43,7 +43,7 @@ class GenericPyBoyEnv(gym.Env):
         self._calculate_fitness()
         reward = self._fitness-self._previous_fitness
 
-        # Get only the first frame as 
+        # Get only the first frame as it is black and white
         observation = self.pyboy.screen.ndarray[:, :, 0]
         info = {}
         truncated = False
