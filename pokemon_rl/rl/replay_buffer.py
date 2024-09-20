@@ -20,6 +20,7 @@ class MixedBuffer:
 	def __init__(self, state_dim: tuple, action_dim: int, max_size=int(1e4), n_step: int = 1, spr_k: int = 5, gamma: float = 0.99, num_episodes: int = 20):
 		self.replay_buffer = ReplayBuffer(state_dim, action_dim, max_size, n_step, spr_k, gamma)
 		self.ep_buffer = EpisodeBuffer(state_dim, action_dim, max_size, n_step, spr_k, gamma, num_episodes)
+		self._num_times_sampled = 0
 
 	def add(self, state, action, reward, next_state, done):
 		self.replay_buffer.add(state, action, reward, next_state, done)
@@ -28,9 +29,10 @@ class MixedBuffer:
 		self.ep_buffer.add_episode(ep_dict, ep_return)
 	
 	def sample(self, batch_size):
+		self._num_times_sampled += 1
 		if self.ep_buffer.is_ready:
-			replay_exps = self.replay_buffer.sample(32)
-			ep_exps = self.ep_buffer.sample(32)
+			replay_exps = self.replay_buffer.sample(batch_size//2, self._num_times_sampled)
+			ep_exps = self.ep_buffer.sample(batch_size//2, self._num_times_sampled)
 			return join_samples(replay_exps, ep_exps)
 		else:
 			return self.replay_buffer.sample(batch_size)
@@ -71,12 +73,12 @@ class EpisodeBuffer:
 			print(self.ep_returns)
 		self.num_adds += 1
 
-	def sample(self, batch_size: int):
+	def sample(self, batch_size: int, num_times_sampled: int = 0):
 		exps = None
 		small_batch_size = 8
-		for i in range(batch_size//8):
+		for i in range(batch_size//small_batch_size):
 			ep_idx = random.randint(0, self.size-1)
-			cur_exps = self.replay_buffers[ep_idx].sample(small_batch_size)
+			cur_exps = self.replay_buffers[ep_idx].sample(small_batch_size, num_times_sampled)
 			if exps is None:
 				exps = cur_exps
 			else:
@@ -111,10 +113,10 @@ class ReplayBuffer:
 		self.size = min(self.size + 1, self.max_size)
 
 
-	def sample(self, batch_size):
+	def sample(self, batch_size, num_times_sampled: int = 0):
 		ind = np.random.randint(0, self.size, size=batch_size)
 		n_steps = np.random.randint(1, self.n_step + 1, size=batch_size)
-		n_steps = betabinom.rvs(self.n_step - 1, 1.0, 2.0, size=batch_size) + 1
+		n_steps = betabinom.rvs(self.n_step - 1, 1.0, min(1.0 + num_times_sampled * 0.00005, 10), size=batch_size) + 1
 
 		n_step_ind = np.clip(ind + n_steps - 1, 0, self.size-1)
 		# Recompute n-steps so that it accounts for the clipping

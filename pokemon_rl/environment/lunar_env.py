@@ -9,9 +9,10 @@ class LunarImageWrapper(gym.Wrapper):
 
     def __init__(self, env):
         super().__init__(env)
-        self.observation_space = spaces.Box(low=0, high=255, shape=(4, *RESHAPE_SIZE), dtype=np.uint8)
+        self.num_steps = 4
+        self.observation_space = spaces.Box(low=0, high=255, shape=(self.num_steps, *RESHAPE_SIZE), dtype=np.uint8)
         # Keep a stack of the previous 4 observations
-        self.prev_obs = np.zeros((4, RESHAPE_SIZE[0], RESHAPE_SIZE[1]), dtype=np.float32)
+        self.prev_obs = np.zeros((self.num_steps, RESHAPE_SIZE[0], RESHAPE_SIZE[1]), dtype=np.float32)
 
     def _get_image_observation(self):
         # Render the CartPole environment

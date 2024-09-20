@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from torch.distributions import Categorical
 import copy
 import random
 import numpy as np
@@ -43,10 +44,11 @@ class CNNValueNetwork(nn.Module):
         self,
         state_dim,
         action_dim: int,
-        out_channels: list[int] = [32, 64, 64, 64],
-        kernel_sizes=[7, 3, 3, 3],
-        strides=[3, 2, 2, 2],
-        linear_hidden_size: int = 32):
+        out_channels: list = [32, 64, 64, 64, 64],
+        kernel_sizes=[8, 4, 3, 3, 3],
+        strides=[4, 2, 2, 2, 2],
+        padding=[0, 1, 1, 1, 1],
+        linear_hidden_size: int = 64):
 
         super().__init__()
         feature_layers = []
@@ -56,7 +58,7 @@ class CNNValueNetwork(nn.Module):
 
         for i in range(len(out_channels)):
             feature_layers.append(
-                nn.Conv2d(cur_in_channels, out_channels[i], kernel_size=kernel_sizes[i], stride=strides[i], padding=1, bias=False))
+                nn.Conv2d(cur_in_channels, out_channels[i], kernel_size=kernel_sizes[i], stride=strides[i], padding=padding[i], bias=False))
             # feature_layers.append(nn.BatchNorm2d(out_channels[i]))
             feature_layers.append(nn.LeakyReLU())
             cur_in_channels = out_channels[i]
@@ -96,6 +98,10 @@ class CNNValueNetwork(nn.Module):
             return self.spr_head(z_t)
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # print("x.shape", x.shape)
+        # for layer in self.features:
+        #     x = layer(x)
+        #     print("x.shape", x.shape)
         x = self.features(x).view(x.shape[0], -1)
         x = self.out(x)
         return x
@@ -136,11 +142,13 @@ class TransitionModel(nn.Module):
         next_state_pred = self.net(stacked_imgs)
         return next_state_pred
 
-class MPLValueNetwork(nn.Module):
-    def __init__(self, state_dim, action_dim, hidden_dim: int = 32):
+class MLPValueNetwork(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_dim: int = 64):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(*state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
@@ -157,8 +165,13 @@ class DQN(nn.Module):
         self._update_iter = 0
         self.action_dim = action_dim
         self.state_dim = state_dim
+        self.actor_temp = self.args.actor_temp_init
+        self.temp_dec_per_step = (self.args.actor_temp_init - self.args.actor_temp_final) / self.args.actor_temp_decay_steps
+        print("self.temp_dec_per_step: ", self.temp_dec_per_step)
         if len(state_dim) == 1:
-            self.q_net = MPLValueNetwork(state_dim, action_dim)
+            self.q_net = MLPValueNetwork(state_dim, action_dim)
+            self.actor = MLPValueNetwork(state_dim, action_dim)
+
         else:
             self.q_net = CNNValueNetwork(state_dim, action_dim)
             self.transforms = v2.Compose([
@@ -167,6 +180,7 @@ class DQN(nn.Module):
             ])
         self.q_net_tgt = copy.deepcopy(self.q_net)
         self.optimizer = Adam(self.q_net.parameters(), lr=self.args.lr)
+        self.actor_optimizer = Adam(self.actor.parameters(), lr=self.args.lr)
 
     def compute_spr_loss(self, state_seq, actions_seq):
         spr_loss = 0
@@ -187,12 +201,22 @@ class DQN(nn.Module):
                 self.args.tgt_tau * param.data + (1.0 - self.args.tgt_tau) * tgt_param.data)
 
     def forward(self, state, should_sample=False):
-        q_vals = self.q_net(state)
-        if should_sample:
-            return np.random.randint(0, self.action_dim, size=state.shape[0])
-        else:
-            with torch.no_grad():
-                return q_vals.argmax(dim=-1).cpu().numpy()
+        with torch.no_grad():
+            action_prob = (self.actor(state)/self.actor_temp).softmax(dim=-1)
+            # print(action_prob)
+            # print(state)
+            # print(self.q_net(state))
+
+            distr = Categorical(action_prob)
+            action = distr.sample()
+
+            return action.cpu().numpy()
+        # q_vals = self.q_net(state)
+        # if should_sample:
+        #     return np.random.randint(0, self.action_dim, size=state.shape[0])
+        # else:
+        #     with torch.no_grad():
+        #         return q_vals.argmax(dim=-1).cpu().numpy()
 
     def get_val_preds(self, states, actions, rewards, next_states, dones, n_steps):
         # Get the Q-values for the actions
@@ -239,9 +263,43 @@ class DQN(nn.Module):
             print("q_vals", q_vals)
             print("td_targets", td_targets)
             print("actions ", action_seq[0])
+            action_prob = (self.actor(states)/self.actor_temp).softmax(dim=-1)
+            print(states[:2])
+            print("action_prob", action_prob)
 
 
-        return loss
+        # if self._update_iter % 8 == 0:
+        #     # with torch.no_grad():
+        #     #     for param in self.q_net_tgt.parameters():
+        #     #         param.add_(torch.randn(param.size(), device=states.device) * 0.0001)
+
+        #     with torch.no_grad():
+        #         for param in self.q_net.parameters():
+        #             param.add_(torch.randn(param.size(), device=states.device) * 0.0001)
+        actor_loss = self.update_actor(states)
+        return loss, actor_loss
+
+    def update_actor(self, state):
+        with torch.no_grad():
+            q_vals = self.q_net(state)
+            # max_q_val, min_q_val = q_vals.max(), q_vals.min()
+
+            # q_vals = (q_vals - min_q_val) / (max_q_val -  min_q_val)
+
+            action_distr = (q_vals/self.args.actor_temp_init).softmax(dim=-1)
+            if self._update_iter % 1024 == 0:
+                print("QVAL action_distr:", action_distr[0:2])
+                print("self.actor_temp", self.actor_temp)
+
+        actor_preds = self.actor(state)
+        
+        actor_loss = F.cross_entropy(actor_preds, action_distr)
+        self.actor_optimizer.zero_grad()
+        actor_loss.backward()
+        nn.utils.clip_grad_norm_(self.actor.parameters(), 10.0)
+        self.actor_optimizer.step()
+        self.actor_temp = max(self.actor_temp - self.temp_dec_per_step, self.args.actor_temp_final)
+        return actor_loss
 
 # m = CNNValueNetwork(1, (1, 72, 80), 10)
 # x = torch.randn(5, 1, 72, 80)
