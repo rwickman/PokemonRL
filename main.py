@@ -95,10 +95,11 @@ def main(args):
             agent.add_episode(ep_dict)
             if ep_idx >= 50 and ep_idx % 10 == 0:
                 for _ in range(50):
-                    loss, actor_loss = agent.update()
+                    loss, actor_loss, contrastive_loss = agent.update()
                     train_iter += 1
                     writer.add_scalar("Loss/value", loss.item(), train_iter)
                     writer.add_scalar("Loss/actor_loss", actor_loss.item(), train_iter)
+                    writer.add_scalar("Loss/contrastive_loss", contrastive_loss.item(), train_iter)
 
 
             if ep_idx >= 50:
@@ -141,6 +142,8 @@ if __name__ == "__main__":
             help="Final temperature used for control.")
         parser.add_argument("--actor_temp_decay_steps", type=int, default=10000,
             help="Number of steps before the temperature decays to final")
+        parser.add_argument("--contrastive_lam", type=float, default=0.01,
+            help="Loss use for contrastive loss.")
 
         parser.add_argument("--gamma", type=float, default=0.99,
             help="Gamma used for computing the return.")

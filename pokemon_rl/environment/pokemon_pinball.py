@@ -6,7 +6,7 @@ from pokemon_rl.constants import ACTIONS
 from pyboy import PyBoy
 import os
 import numpy as np
-
+import random
 from enum import Enum
 
 # ACTIONS = [
@@ -28,11 +28,13 @@ class Actions(Enum):
     RIGHT_FLIPPER_PRESS = 2
     LEFT_FLIPPER_RELEASE = 3
     RIGHT_FLIPPER_RELEASE = 4
-    LEFT_TILT = 5
-    RIGHT_TILT = 6
-    UP_TILT = 7
-    LEFT_UP_TILT = 8
-    RIGHT_UP_TILT = 9
+    LEFT_FLIPPER_TAP = 5
+    RIGHT_FLIPPER_TAP = 6
+    LEFT_TILT = 7
+    RIGHT_TILT = 8
+    UP_TILT = 9
+    LEFT_UP_TILT = 10
+    RIGHT_UP_TILT = 11
 
 
 class PinballPyBoyEnv(gym.Env):
@@ -51,7 +53,7 @@ class PinballPyBoyEnv(gym.Env):
             self.pyboy.set_emulation_speed(0)
   
         
-        self.action_space = spaces.Discrete(10)
+        self.action_space = spaces.Discrete(12)
         self.observation_space = spaces.Box(low=0, high=1.0, shape=(16*20, ), dtype=np.float32)
         self.pyboy.game_wrapper.start_game()
 
@@ -68,13 +70,26 @@ class PinballPyBoyEnv(gym.Env):
             self._calculate_fitness()
             reward += (self._fitness - self._previous_fitness) / 1000
 
+
         done = self.pyboy.game_wrapper.game_over
  
-        
-        
-
         # Get only the first frame as it is black and white
         observation = self._get_obs()
+        num_skips = 0
+        while (observation == self._prev_obs).sum() == len(observation):
+            self.perform_action(4)
+            self.pyboy.tick(1, self.do_render)
+            self.perform_action(2)
+            self.pyboy.tick(1, self.do_render)
+            self.perform_action(4)
+            self.perform_action(9)
+            self.pyboy.tick(1, self.do_render)
+
+            observation = self._get_obs()
+            num_skips += 1
+            if num_skips % 1000 == 0:
+                print("NUM SKIPS:", num_skips)
+        self._prev_obs = observation
         info = {}
         truncated = False
         
@@ -92,6 +107,10 @@ class PinballPyBoyEnv(gym.Env):
             self.pyboy.button_release("left")
         elif action == Actions.RIGHT_FLIPPER_RELEASE.value:
             self.pyboy.button_release("a")
+        elif action == Actions.LEFT_FLIPPER_TAP.value:
+            self.pyboy.button("left")
+        elif action == Actions.RIGHT_FLIPPER_TAP.value:
+            self.pyboy.button("a")
         elif action == Actions.LEFT_TILT.value:
             self.pyboy.button("down")
         elif action == Actions.RIGHT_TILT.value:
@@ -113,11 +132,17 @@ class PinballPyBoyEnv(gym.Env):
         self._fitness = self.pyboy.game_wrapper.score
 
     def reset(self, **kwargs):
+
         self.pyboy.game_wrapper.reset_game()
         self._fitness = 0
         self._previous_fitness = 0
 
-        observation = self._get_obs()
+        # Pick a random level
+        self.pyboy.tick(random.randint(1, 100), self.do_render)
+        self.perform_action(8)
+        self.pyboy.tick(1, self.do_render)
+
+        self._prev_obs = observation = self._get_obs()
         info = {}
         return observation, info
 

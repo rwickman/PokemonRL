@@ -8,6 +8,8 @@ from torch.optim import Adam
 import torch.nn.functional as F
 from torchvision.transforms import v2
 
+from pokemon_rl.rl.state_discriminator import StateDiscriminator 
+
 print("np.random.randint(0, 5)", np.random.randint(0, 5))
 print("random.random()", random.random())
 print("torch.randn(5)", torch.randn(5))
@@ -143,20 +145,26 @@ class TransitionModel(nn.Module):
         return next_state_pred
 
 class MLPValueNetwork(nn.Module):
-    def __init__(self, state_dim, action_dim, hidden_dim: int = 64):
+    def __init__(self, state_dim, action_dim, hidden_dim: int = 128):
         super().__init__()
-        self.net = nn.Sequential(
+        self.trunk = nn.Sequential(
             nn.Linear(*state_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        self.head = nn.Sequential(
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
         )
-    
+
+    def forward_with_inter(self, state):
+        state = state_latent = self.trunk(state)
+        return self.head(state), state_latent
+
     def forward(self, state):
-        return self.net(state)
+        return self.head(self.trunk(state))
 
 class DQN(nn.Module):
     def __init__(self, args, state_dim, action_dim):
@@ -168,9 +176,12 @@ class DQN(nn.Module):
         self.actor_temp = self.args.actor_temp_init
         self.temp_dec_per_step = (self.args.actor_temp_init - self.args.actor_temp_final) / self.args.actor_temp_decay_steps
         print("self.temp_dec_per_step: ", self.temp_dec_per_step)
+        print("state_dim", state_dim)
+        print("action_dim", action_dim)
         if len(state_dim) == 1:
             self.q_net = MLPValueNetwork(state_dim, action_dim)
             self.actor = MLPValueNetwork(state_dim, action_dim)
+            self._state_disc = StateDiscriminator(128, 128)
 
         else:
             self.q_net = CNNValueNetwork(state_dim, action_dim)
@@ -179,8 +190,11 @@ class DQN(nn.Module):
                 v2.ColorJitter(0.05, 0.05, 0.05, 0.05)
             ])
         self.q_net_tgt = copy.deepcopy(self.q_net)
-        self.optimizer = Adam(self.q_net.parameters(), lr=self.args.lr)
-        self.actor_optimizer = Adam(self.actor.parameters(), lr=self.args.lr)
+        self.optimizer = Adam(
+            list(self.q_net.parameters()) + list(self._state_disc.parameters()),
+            lr=self.args.lr
+        )
+        self.actor_optimizer = Adam(self.actor.parameters(), lr=5e-5)
 
     def compute_spr_loss(self, state_seq, actions_seq):
         spr_loss = 0
@@ -204,7 +218,7 @@ class DQN(nn.Module):
         with torch.no_grad():
             action_prob = (self.actor(state)/self.actor_temp).softmax(dim=-1)
             # print(action_prob)
-            # print(state)
+
             # print(self.q_net(state))
 
             distr = Categorical(action_prob)
@@ -220,7 +234,7 @@ class DQN(nn.Module):
 
     def get_val_preds(self, states, actions, rewards, next_states, dones, n_steps):
         # Get the Q-values for the actions
-        q_vals_matrix = self.q_net(states)
+        q_vals_matrix, state_latent = self.q_net.forward_with_inter(states)
         q_vals = q_vals_matrix.gather(1, actions.unsqueeze(1)).squeeze(1)
 
         with torch.no_grad():
@@ -237,17 +251,21 @@ class DQN(nn.Module):
             else:
                 td_targets = rewards + self.args.gamma ** n_steps * dqn_target * (1.0 - dones)
     
-        return q_vals, rescaling(td_targets)
+        return q_vals, rescaling(td_targets), state_latent
 
     def update(self, states, action_seq, rewards, next_states, state_seq, dones, n_steps):
-        q_vals, td_targets = self.get_val_preds(states, action_seq[0], rewards, next_states, dones, n_steps)
-        if len(self.state_dim) > 1 and self.args.spr_lam > 0.0:
-            spr_loss = self.compute_spr_loss(state_seq, action_seq)
-        else:
-            spr_loss = 0
+        q_vals, td_targets, state_latent = self.get_val_preds(states, action_seq[0], rewards, next_states, dones, n_steps)
+        next_states_latent = self.q_net.trunk(next_states)
+
+        # if len(self.state_dim) > 1 and self.args.spr_lam > 0.0:
+        #     spr_loss = self.compute_spr_loss(state_seq, action_seq)
+        # else:
+        #     spr_loss = 0
 
         q_val_loss = F.mse_loss(q_vals, td_targets)
-        loss = q_val_loss + self.args.spr_lam * spr_loss
+        contrastive_loss = self._state_disc.contrastive_loss(state_latent, next_states_latent)        
+
+        loss = q_val_loss + self.args.contrastive_lam * contrastive_loss
         
         self.optimizer.zero_grad()
         loss.backward()
@@ -255,17 +273,18 @@ class DQN(nn.Module):
         self.optimizer.step()
         self._update_target()
         self._update_iter += 1
+
         if self._update_iter % 1024 == 0:
-            print("loss", loss, "q_val_loss", q_val_loss, "spr_loss", spr_loss)
+            print("loss", loss, "q_val_loss", q_val_loss, "contrastive_loss", contrastive_loss)
             print("n_steps", n_steps)
             print("rewards", rewards)
             print("dones", dones)
             print("q_vals", q_vals)
             print("td_targets", td_targets)
             print("actions ", action_seq[0])
-            action_prob = (self.actor(states)/self.actor_temp).softmax(dim=-1)
-            print(states[:2])
-            print("action_prob", action_prob)
+            # action_prob = (self.actor(states)/self.actor_temp).softmax(dim=-1)
+            # # print(states[:2])
+            # print("action_prob", action_prob[:10])
 
 
         # if self._update_iter % 8 == 0:
@@ -274,31 +293,36 @@ class DQN(nn.Module):
         #     #         param.add_(torch.randn(param.size(), device=states.device) * 0.0001)
 
         #     with torch.no_grad():
-        #         for param in self.q_net.parameters():
+        #         for param in self.actor.parameters():
         #             param.add_(torch.randn(param.size(), device=states.device) * 0.0001)
+
         actor_loss = self.update_actor(states)
-        return loss, actor_loss
+        return loss, actor_loss, contrastive_loss
 
     def update_actor(self, state):
         with torch.no_grad():
             q_vals = self.q_net(state)
-            # max_q_val, min_q_val = q_vals.max(), q_vals.min()
+            max_q_val, min_q_val = q_vals.max(), q_vals.min()
 
-            # q_vals = (q_vals - min_q_val) / (max_q_val -  min_q_val)
+            q_vals = (q_vals - min_q_val) / (max_q_val -  min_q_val)
 
-            action_distr = (q_vals/self.args.actor_temp_init).softmax(dim=-1)
-            if self._update_iter % 1024 == 0:
-                print("QVAL action_distr:", action_distr[0:2])
-                print("self.actor_temp", self.actor_temp)
-
-        actor_preds = self.actor(state)
+            action_distr = (q_vals/0.1).softmax(dim=-1)
         
+        
+        actor_preds = self.actor(state)        
+        if self._update_iter % 1024 == 0:
+            print("QVAL action_distr:", action_distr[:6], action_distr.shape)
+            print("actor_preds", actor_preds[:6], actor_preds.shape)
+            print("actor_preds DISTR:", actor_preds.softmax(dim=-1)[:6])
+            print("self.actor_temp", self.actor_temp)
+
         actor_loss = F.cross_entropy(actor_preds, action_distr)
         self.actor_optimizer.zero_grad()
         actor_loss.backward()
         nn.utils.clip_grad_norm_(self.actor.parameters(), 10.0)
         self.actor_optimizer.step()
         self.actor_temp = max(self.actor_temp - self.temp_dec_per_step, self.args.actor_temp_final)
+
         return actor_loss
 
 # m = CNNValueNetwork(1, (1, 72, 80), 10)

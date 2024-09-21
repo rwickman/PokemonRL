@@ -60,12 +60,12 @@ def main(args):
             agent.add_trajectory(state, action, reward, next_state, done)
             state = next_state
 
-            if ep_idx >= EP_BEFORE_TRAIN and num_steps % 20 == 0 and args.render_mode != "human":
-                loss, actor_loss = agent.update()
+            if ep_idx >= EP_BEFORE_TRAIN and num_steps % 64 == 0 and args.render_mode != "human":
+                loss, actor_loss, contrastive_loss = agent.update()
                 train_iter += 1
                 writer.add_scalar("Loss/value", loss.item(), train_iter)
                 writer.add_scalar("Loss/actor_loss", actor_loss.item(), train_iter)
-
+                writer.add_scalar("Loss/contrastive_loss", contrastive_loss.item(), train_iter)
 
             num_steps += 1
 
@@ -105,7 +105,7 @@ if __name__ == "__main__":
             help="Learning rate used for updating the models.")
         parser.add_argument("--gamma", type=float, default=0.99,
             help="Gamma used for computing the return.")
-        parser.add_argument("--tgt_tau", type=float, default=0.005,
+        parser.add_argument("--tgt_tau", type=float, default=0.001,
             help="Tau used for smooth target updates.")
         parser.add_argument("--eps", type=float, default=0.99,
             help="Initial epsilon value used for epsilon-greedy exploration.")
@@ -129,6 +129,8 @@ if __name__ == "__main__":
             help="Initial temperature used for control.")
         parser.add_argument("--actor_temp_final", type=float, default=0.01,
             help="Final temperature used for control.")
+        parser.add_argument("--contrastive_lam", type=float, default=0.01,
+            help="Loss use for contrastive loss.")
         parser.add_argument("--actor_temp_decay_steps", type=int, default=100000,
             help="Number of steps before the temperature decays to final")
         main(parser.parse_args())
