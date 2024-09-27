@@ -2,8 +2,6 @@ from pokemon_rl.utils import set_seed
 import argparse, os
 
 from pokemon_rl.environment.pokemon_pinball import PinballPyBoyEnv
-import pygame
-import time
 
 EP_BEFORE_TRAIN = 10
 
@@ -102,6 +100,8 @@ if __name__ == "__main__":
         parser.add_argument("--continuous", action="store_true",
             help="Indicates the RL alg. should ignore done.")
         parser.add_argument("--lr", type=float, default=3e-4,
+            help="Learning rate used for updating the models.")
+        parser.add_argument("--actor_lr", type=float, default=1e-4,
             help="Learning rate used for updating the models.")
         parser.add_argument("--gamma", type=float, default=0.99,
             help="Gamma used for computing the return.")

@@ -145,15 +145,62 @@ class TransitionModel(nn.Module):
         return next_state_pred
 
 class MLPValueNetwork(nn.Module):
-    def __init__(self, state_dim, action_dim, hidden_dim: int = 128):
+    def __init__(self, state_dim, action_dim, hidden_dim: int = 128, n_layers: int = 2):
         super().__init__()
-        self.trunk = nn.Sequential(
+        hidden_layers = [
             nn.Linear(*state_dim, hidden_dim),
+            nn.ReLU()
+        ] 
+        for i in range(n_layers - 1):
+            hidden_layers.append(nn.Linear(hidden_dim, hidden_dim))
+            if i + 1 < n_layers:
+                hidden_layers.append(nn.ReLU())
+
+        self.trunk = nn.Sequential(*hidden_layers)
+
+        self.advantage_head = nn.Sequential(
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
+            nn.Linear(hidden_dim, action_dim),
         )
+        self.value_head = nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
+
+    def forward_with_inter(self, state):
+        state_latent = self.trunk(state)
+        value = self.value_head(state_latent)
+        advantage = self.advantage_head(state_latent)
+        q_val = value + advantage - advantage.mean(dim=-1, keepdim=True)
+
+        return q_val, state_latent
+
+    def forward(self, state):
+        state_latent = self.trunk(state)
+        value = self.value_head(state_latent)
+        advantage = self.advantage_head(state_latent)
+        q_val = value + advantage - advantage.mean(dim=-1, keepdim=True)
+        return q_val
+
+
+
+class MLPNetwork(nn.Module):
+    def __init__(self, state_dim, action_dim, hidden_dim: int = 128, n_layers: int = 2):
+        super().__init__()
+        hidden_layers = [
+            nn.Linear(*state_dim, hidden_dim),
+            nn.ReLU()
+        ] 
+        for i in range(n_layers - 1):
+            hidden_layers.append(nn.Linear(hidden_dim, hidden_dim))
+            if i + 1 < n_layers:
+                hidden_layers.append(nn.ReLU())
+        self.trunk = nn.Sequential(*hidden_layers)
         self.head = nn.Sequential(
             nn.ReLU(),
             nn.Linear(hidden_dim, action_dim),
@@ -179,9 +226,10 @@ class DQN(nn.Module):
         print("state_dim", state_dim)
         print("action_dim", action_dim)
         if len(state_dim) == 1:
-            self.q_net = MLPValueNetwork(state_dim, action_dim)
-            self.actor = MLPValueNetwork(state_dim, action_dim)
-            self._state_disc = StateDiscriminator(128, 128)
+            self.q_net = MLPValueNetwork(state_dim, action_dim, self.args.hidden_dim, self.args.n_layers)
+            self.actor = MLPNetwork(state_dim, action_dim, self.args.hidden_dim, self.args.n_layers)
+            self._state_disc = StateDiscriminator(self.args.hidden_dim, self.args.hidden_dim)
+            self._state_actor_disc = StateDiscriminator(self.args.hidden_dim, self.args.hidden_dim)
 
         else:
             self.q_net = CNNValueNetwork(state_dim, action_dim)
@@ -194,7 +242,10 @@ class DQN(nn.Module):
             list(self.q_net.parameters()) + list(self._state_disc.parameters()),
             lr=self.args.lr
         )
-        self.actor_optimizer = Adam(self.actor.parameters(), lr=5e-5)
+        self.actor_optimizer = Adam(
+            list(self.actor.parameters()) + list(self._state_actor_disc.parameters()),
+            lr=self.args.actor_lr
+        )
 
     def compute_spr_loss(self, state_seq, actions_seq):
         spr_loss = 0
@@ -217,7 +268,8 @@ class DQN(nn.Module):
     def forward(self, state, should_sample=False):
         with torch.no_grad():
             action_prob = (self.actor(state)/self.actor_temp).softmax(dim=-1)
-            # print(action_prob)
+            if self.args.render_mode != None:
+                print(action_prob)
 
             # print(self.q_net(state))
 
@@ -296,33 +348,38 @@ class DQN(nn.Module):
         #         for param in self.actor.parameters():
         #             param.add_(torch.randn(param.size(), device=states.device) * 0.0001)
 
-        actor_loss = self.update_actor(states)
+        actor_loss = self.update_actor(states, next_states)
         return loss, actor_loss, contrastive_loss
 
-    def update_actor(self, state):
+    def update_actor(self, state, next_states):
         with torch.no_grad():
             q_vals = self.q_net(state)
             max_q_val, min_q_val = q_vals.max(), q_vals.min()
 
             q_vals = (q_vals - min_q_val) / (max_q_val -  min_q_val)
 
-            action_distr = (q_vals/0.1).softmax(dim=-1)
-        
-        
-        actor_preds = self.actor(state)        
+            action_distr = (q_vals/0.2).softmax(dim=-1)
+
+        actor_preds, state_latent = self.actor.forward_with_inter(state)
+        next_states_latent = self.actor.trunk(next_states)
         if self._update_iter % 1024 == 0:
             print("QVAL action_distr:", action_distr[:6], action_distr.shape)
             print("actor_preds", actor_preds[:6], actor_preds.shape)
             print("actor_preds DISTR:", actor_preds.softmax(dim=-1)[:6])
+            print("actor_preds WITH TEMP DISTR:", (actor_preds/self.actor_temp).softmax(dim=-1)[:6])
+
             print("self.actor_temp", self.actor_temp)
 
-        actor_loss = F.cross_entropy(actor_preds, action_distr)
+        contrastive_loss = self._state_actor_disc.contrastive_loss(state_latent, next_states_latent)
+
+        actor_loss = F.cross_entropy(actor_preds, action_distr) 
+        total_loss =  actor_loss + 0.1 * self.args.contrastive_lam * contrastive_loss
+
         self.actor_optimizer.zero_grad()
-        actor_loss.backward()
+        total_loss.backward()
         nn.utils.clip_grad_norm_(self.actor.parameters(), 10.0)
         self.actor_optimizer.step()
         self.actor_temp = max(self.actor_temp - self.temp_dec_per_step, self.args.actor_temp_final)
-
         return actor_loss
 
 # m = CNNValueNetwork(1, (1, 72, 80), 10)

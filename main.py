@@ -29,7 +29,7 @@ def main(args):
     #       args,
     #       env.observation_space.shape,
     #       gym_env.action_space.n)
-    suffix = "_betanstep_cv"
+    suffix = "_betanstep_cv_dueling"
 
     env = gym.make(env_name, render_mode=args.render_mode)
     agent = DQNAgent(
@@ -47,7 +47,7 @@ def main(args):
         # print(env.observation_space.shape)
         # screen = pygame.display.set_mode((env.observation_space.shape[2], env.observation_space.shape[1]))
     else:
-        writer = SummaryWriter(comment=f"_{env_name}_nstep_{args.n_step}_buffer_{args.replay_buffer_size}_sprlam_{args.spr_lam}_BufferEps_{args.buffer_episodes}{suffix}")
+        writer = SummaryWriter(comment=f"_{env_name}_nstep_{args.n_step}_buffer_{args.replay_buffer_size}_sprlam_{args.spr_lam}_BufferEps_{args.buffer_episodes}_actor_temp_decay_steps_{args.actor_temp_decay_steps}_actor_temp_final_{args.actor_temp_final}{suffix}")
         train_iter = 0
     for ep_idx in range(args.num_episodes):
         done = terminated = False
@@ -134,7 +134,14 @@ if __name__ == "__main__":
             help="Number of episodes to run.")
         parser.add_argument("--continuous", action="store_true",
             help="Indicates the RL alg. should ignore done.")
+        parser.add_argument("--hidden_dim", type=int, default=64,
+            help="Number of parameters in the hidden dimension.")
+        parser.add_argument("--n_layers", type=int, default=2,
+            help="Number of layers.")
+
         parser.add_argument("--lr", type=float, default=3e-4,
+            help="Learning rate used for updating the models.")
+        parser.add_argument("--actor_lr", type=float, default=1e-4,
             help="Learning rate used for updating the models.")
         parser.add_argument("--actor_temp_init", type=float, default=2.0,
             help="Initial temperature used for control.")

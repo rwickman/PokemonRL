@@ -3,7 +3,6 @@ from gymnasium import spaces
 import numpy as np
 from pyboy import PyBoy
 from pokemon_rl.constants import ACTIONS
-from pyboy import PyBoy
 import os
 import numpy as np
 import random
