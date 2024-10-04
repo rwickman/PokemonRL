@@ -35,8 +35,8 @@ class DQNAgent:
         self.replay_buffer.add_episode(ep_dict, sum(ep_dict["rewards"]))
 
     def update(self):
-        state, action_seq, reward, next_state, state_seq, done, n_steps = self.replay_buffer.sample(self.args.batch_size)
-        loss = self.dqn.update(state, action_seq, reward, next_state, state_seq, done, n_steps)
+        state, action, reward, next_state, done, n_steps = self.replay_buffer.sample(self.args.batch_size)
+        loss = self.dqn.update(state, action, reward, next_state, done, n_steps)
         return loss
 
     def mark_episode(self):

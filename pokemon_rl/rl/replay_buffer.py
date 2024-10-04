@@ -9,11 +9,9 @@ from scipy.stats import betabinom
 
 def join_samples(sample_1, sample_2):
 	for i in range(len(sample_1)):
-		axis = 0
-		if i in [1, 4]:
-			axis = 1
+	
 
-		sample_1[i] = torch.cat((sample_1[i], sample_2[i]), dim=axis)
+		sample_1[i] = torch.cat((sample_1[i], sample_2[i]), dim=0)
 	return sample_1
 
 class MixedBuffer:
@@ -116,18 +114,18 @@ class ReplayBuffer:
 	def sample(self, batch_size, num_times_sampled: int = 0):
 		ind = np.random.randint(0, self.size, size=batch_size)
 		n_steps = np.random.randint(1, self.n_step + 1, size=batch_size)
-		n_steps = betabinom.rvs(self.n_step - 1, 1.0, min(1.0 + num_times_sampled * 0.00005, 10), size=batch_size) + 1
+		n_steps = betabinom.rvs(self.n_step - 1, 1.0, min(1.0 + num_times_sampled * 0.00001, 10), size=batch_size) + 1
 
 		n_step_ind = np.clip(ind + n_steps - 1, 0, self.size-1)
 		# Recompute n-steps so that it accounts for the clipping
 		n_steps = n_step_ind - ind + 1
 
-		state_seq = np.zeros((self.spr_k + 1, batch_size, *self.state[0].shape), dtype=self.state.dtype)
-		action_seq = np.zeros((self.spr_k + 1, batch_size), dtype=self.action.dtype)
-		for i in range(self.spr_k + 1):
-			cur_ind = np.clip(ind + i, 0, self.size-1)
-			state_seq[i] = self.state[cur_ind]
-			action_seq[i] = self.action[cur_ind]
+		# state_seq = np.zeros((self.spr_k + 1, batch_size, *self.state[0].shape), dtype=self.state.dtype)
+		# action_seq = np.zeros((self.spr_k + 1, batch_size), dtype=self.action.dtype)
+		# for i in range(self.spr_k + 1):
+		# 	cur_ind = np.clip(ind + i, 0, self.size-1)
+		# 	state_seq[i] = self.state[cur_ind]
+		# 	action_seq[i] = self.action[cur_ind]
 
 		# Compute the n-step trajectories
 		# rewards = np.zeros(batch_size, dtype=np.float32)
@@ -164,10 +162,9 @@ class ReplayBuffer:
 			# torch.tensor(self.next_state[ind + n_steps - 1]).to(self.device),
 		return [
 			torch.tensor(self.state[ind]).to(self.device),
-			torch.tensor(action_seq).to(self.device),
+			torch.tensor(self.action[ind]).to(self.device),
 			torch.tensor(rewards).to(self.device),
 			torch.tensor(self.next_state[n_step_ind]).to(self.device),
-			torch.tensor(state_seq).to(self.device),
 			torch.tensor(dones).to(self.device),
 			torch.tensor(n_steps).to(self.device)
 		]

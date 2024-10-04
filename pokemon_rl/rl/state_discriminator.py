@@ -21,6 +21,8 @@ class StateDiscriminator(nn.Module):
         self.loss_fn = nn.CrossEntropyLoss()
 
     def contrastive_loss(self, obs, obs_next):
+        # obs = obs + torch.rand_like(obs) * 0.001
+        # obs_next = obs_next + torch.rand_like(obs) * 0.001
         obs_latent = self._state_encoder(obs)
         obs_next_latent = self._state_encoder(obs_next)
         
