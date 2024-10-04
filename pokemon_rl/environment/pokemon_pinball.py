@@ -37,29 +37,31 @@ class Actions(Enum):
 
 CUSTOM_DATA_SIZE = 14
 GAME_AREA_SIZE = 16 * 20
-NUM_STACKS = 2
-STATE_SIZE = CUSTOM_DATA_SIZE + GAME_AREA_SIZE
+NUM_STACKS = 4
+STATE_SIZE = (72, 80)#CUSTOM_DATA_SIZE + GAME_AREA_SIZE
 
 class PinballPyBoyEnv(gym.Env):
 
     def __init__(self, rom_file: str, debug=False, do_render=False, frame_skip: int = 2):
         super().__init__()
         cur_dir = os.path.dirname(os.path.realpath(__file__))
+ 
         self.pyboy = PyBoy(os.path.join(cur_dir, rom_file), window="null" if not do_render else "SDL2")
+        do_render = True
         self.do_render = do_render
         self._fitness = 0
         self._previous_fitness = 0
         self.debug = debug
         self.frame_skip = frame_skip
         self.flippers_active = [0.0, 0.0]
-        self.state = np.zeros((NUM_STACKS, STATE_SIZE), dtype=np.float32)
+        self.state = np.zeros((NUM_STACKS, *STATE_SIZE), dtype=np.float32)
 
         if not self.debug:
             self.pyboy.set_emulation_speed(0)
   
         
         self.action_space = spaces.Discrete(10)
-        self.observation_space = spaces.Box(low=0, high=1.0, shape=(NUM_STACKS * STATE_SIZE,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=0, high=1.0, shape=(NUM_STACKS, *STATE_SIZE,), dtype=np.float32)
         self.pyboy.game_wrapper.start_game()
 
 
@@ -78,7 +80,7 @@ class PinballPyBoyEnv(gym.Env):
         done = self.done
 
         # Get only the first frame as it is black and white
-        observation = self._get_obs()
+        observation = self.pyboy.game_area()
         num_skips = 0
         while (observation == self._prev_obs).sum() == len(observation) and not done:
             self.perform_action(4)
@@ -89,7 +91,7 @@ class PinballPyBoyEnv(gym.Env):
             self.perform_action(7)
             self.pyboy.tick(1, self.do_render)
 
-            observation = self._get_obs()
+            observation = self.pyboy.game_area()
             num_skips += 1
             if num_skips % 1000 == 0:
                 print("NUM SKIPS:", num_skips)
@@ -97,14 +99,14 @@ class PinballPyBoyEnv(gym.Env):
             reward += self._calculate_fitness()
 
         self.state = np.roll(self.state, 1, axis=0)
-        self.state[0] = observation
+        self.state[0] = self._get_obs()
 
+        # print(self.state)
         self._prev_obs = observation
         info = {}
         truncated = False
 
-
-        return self.state.flatten(), reward, done, truncated, info
+        return self.state, reward, done, truncated, info
 
     @property
     def done(self):
@@ -142,41 +144,42 @@ class PinballPyBoyEnv(gym.Env):
     def _get_obs(self):
         state = cv2.cvtColor(self.pyboy.screen.ndarray, cv2.COLOR_RGB2GRAY)
         state = downscale_local_mean(state, (2, 2))
-        print(state.shape)
-        # print(self.pyboy.game_area())
+        return state/255
+        # print(state.shape)
+        # # print(self.pyboy.game_area())
 
-        game_area = np.array(self.pyboy.game_area().flatten() / 255.0, dtype=np.float32)
-        custom_data = np.array(
-            [
-                self.pyboy.game_wrapper.ball_x,
-                self.pyboy.game_wrapper.ball_y,
-                self.pyboy.game_wrapper.ball_x_velocity,
-                self.pyboy.game_wrapper.ball_y_velocity,
-                self.pyboy.game_wrapper.current_map,
-                self.pyboy.game_wrapper.current_stage,
-                self.pyboy.game_wrapper.ball_saver_seconds_left,
-                self.pyboy.game_wrapper.pokemon_caught_in_session,
-                self.pyboy.game_wrapper.pokemon_seen_in_session,
-                self.pyboy.game_wrapper.roulette_slots_opened,
-                self.pyboy.game_wrapper.roulette_slots_entered,
-                self.pyboy.game_wrapper.multiplier,
-                *self.flippers_active
-            ],
-            dtype=np.float32
-        ) / 255
-        # print([
+        # game_area = np.array(self.pyboy.game_area().flatten() / 255.0, dtype=np.float32)
+        # custom_data = np.array(
+        #     [
         #         self.pyboy.game_wrapper.ball_x,
         #         self.pyboy.game_wrapper.ball_y,
         #         self.pyboy.game_wrapper.ball_x_velocity,
         #         self.pyboy.game_wrapper.ball_y_velocity,
-        #         self.pyboy.game_wrapper.ball_saver_seconds_left
-        # ])
-        # print(self.pyboy.game_wrapper)
-        # print(self.pyboy.memory[0xd4b3], self.pyboy.memory[0xd4b7])
-        # print(self.pyboy.memory[0xd4b5], self.pyboy.memory[0xd4b9])
-        # observation = self.pyboy.screen.ndarray[:, :, 0]
-        # print("self.pyboy.screen.ndarray", self.pyboy.screen.ndarray.shape)
-        return np.concatenate([game_area, custom_data])
+        #         self.pyboy.game_wrapper.current_map,
+        #         self.pyboy.game_wrapper.current_stage,
+        #         self.pyboy.game_wrapper.ball_saver_seconds_left,
+        #         self.pyboy.game_wrapper.pokemon_caught_in_session,
+        #         self.pyboy.game_wrapper.pokemon_seen_in_session,
+        #         self.pyboy.game_wrapper.roulette_slots_opened,
+        #         self.pyboy.game_wrapper.roulette_slots_entered,
+        #         self.pyboy.game_wrapper.multiplier,
+        #         *self.flippers_active
+        #     ],
+        #     dtype=np.float32
+        # ) / 255
+        # # print([
+        # #         self.pyboy.game_wrapper.ball_x,
+        # #         self.pyboy.game_wrapper.ball_y,
+        # #         self.pyboy.game_wrapper.ball_x_velocity,
+        # #         self.pyboy.game_wrapper.ball_y_velocity,
+        # #         self.pyboy.game_wrapper.ball_saver_seconds_left
+        # # ])
+        # # print(self.pyboy.game_wrapper)
+        # # print(self.pyboy.memory[0xd4b3], self.pyboy.memory[0xd4b7])
+        # # print(self.pyboy.memory[0xd4b5], self.pyboy.memory[0xd4b9])
+        # # observation = self.pyboy.screen.ndarray[:, :, 0]
+        # # print("self.pyboy.screen.ndarray", self.pyboy.screen.ndarray.shape)
+        # return np.concatenate([game_area, custom_data])
 
     def _calculate_fitness(self):
         self._previous_fitness = self._fitness
@@ -195,12 +198,11 @@ class PinballPyBoyEnv(gym.Env):
         self.perform_action(6)
         self.pyboy.tick(1, self.do_render)
 
-        self._prev_obs = observation = self._get_obs()
+        self._prev_obs = self.pyboy.game_area()
         info = {}
 
-        self.state[:] = observation
-
-        return self.state.flatten(), info
+        self.state[:] = self._get_obs()
+        return self.state, info
 
     def render(self, mode='human'):
         pass

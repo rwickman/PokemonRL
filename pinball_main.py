@@ -67,7 +67,7 @@ def main(args):
 
             total_reward += reward
             agent.add_trajectory(state, action, reward, next_state, done)
-            state = next_state.copy()
+            state = next_state
             # print(state)
 
             if ep_idx >= EP_BEFORE_TRAIN and num_steps % 32 == 0 and args.render_mode != "human":
@@ -131,7 +131,7 @@ if __name__ == "__main__":
             help="The ammount epsilon is decayed after each episode.")
         parser.add_argument("--eps_min", type=float, default=0.05,
             help="Minimum epsilon value.")
-        parser.add_argument("--replay_buffer_size", type=int, default=int(1e6),
+        parser.add_argument("--replay_buffer_size", type=int, default=int(1e5),
             help="Maximum size of the replay buffer.")
         parser.add_argument("--batch_size", type=int, default=128,
             help="Batch size for training the model.")
@@ -141,7 +141,7 @@ if __name__ == "__main__":
             help="Lambda for SPR loss.")
         parser.add_argument("--spr_k", type=int, default=1,
             help="Number of steps for SPR loss to forecast into the future.")
-        parser.add_argument("--buffer_episodes", type=int, default=30,
+        parser.add_argument("--buffer_episodes", type=int, default=20,
             help="Number of episodes to store in the episode buffer.")
         parser.add_argument("--actor_temp_init", type=float, default=1.0,
             help="Initial temperature used for control.")

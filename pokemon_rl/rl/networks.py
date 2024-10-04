@@ -42,17 +42,14 @@ def inverse_rescaling(x):
     eps = 0.001
     return torch.sign(x) * (torch.square(((torch.sqrt(1. + 4. * eps * (torch.abs(x) + 1. + eps))) - 1.) / (2. * eps)) - 1.)
 
-class CNNValueNetwork(nn.Module):
+class CNNTrunk(nn.Module):
     def __init__(
         self,
         state_dim,
-        action_dim: int,
-        out_channels: list = [32, 64, 64, 64, 64],
-        kernel_sizes=[8, 4, 3, 3, 3],
-        strides=[4, 2, 2, 2, 2],
-        padding=[0, 1, 1, 1, 1],
-        hidden_dim: int = 128):
-
+        out_channels: list = [32, 64, 64, 64],
+        kernel_sizes=[8, 3, 3, 3],
+        strides=[2, 2, 2, 2],
+        padding=[0, 0, 1, 1]):
         super().__init__()
         feature_layers = []
         cur_in_channels = state_dim[0]
@@ -69,20 +66,58 @@ class CNNValueNetwork(nn.Module):
         self.trunk = nn.Sequential(*feature_layers)
 
         with torch.no_grad():
-            cnn_out_dim = int(self.trunk(torch.randn(1, *state_dim)).view(1, -1).shape[-1])
-            print("cnn_out_dim", cnn_out_dim)
-        
-
-        self.head = MLPValueNetwork(cnn_out_dim, action_dim, hidden_dim, 1)
-
-    def forward_with_inter(self, state):
-        return self.trunk.forward_with_inter(self.trunk(state))
-
-    def advantage(self, state):
-        return self.head.advantage_head(self.trunk(state))
+            self.cnn_out_dim = self.trunk(torch.randn(1, *state_dim))
+            print("self.cnn_out_dim none flat shape", self.cnn_out_dim.shape)
+            self.cnn_out_dim  = int(self.cnn_out_dim.view(1, -1).shape[-1])
+            print("self.cnn_out_dim", self.cnn_out_dim)
 
     def forward(self, state):
-        return self.trunk(self.head(state))
+        return self.trunk(state).view(state.shape[0], -1)
+        
+
+class CNNValueNetwork(nn.Module):
+    def __init__(
+        self,
+        state_dim,
+        action_dim,
+        hidden_dim: int = 128):
+        super().__init__()
+        self.trunk = CNNTrunk(state_dim)
+
+        self.head = MLPValueNetwork((self.trunk.cnn_out_dim, ), action_dim, hidden_dim, 1)
+
+    def get_state_latents(self, state):
+        state_features = self.trunk(state)
+        state_latent = self.head.trunk(state_features)
+        state_adv_latent = self.head.advantage_trunk(state_latent)
+        return state_latent, state_adv_latent
+
+    def forward_with_inter(self, state):
+        return self.head.forward_with_inter(self.trunk(state))
+
+    def advantage(self, state):
+        return self.head.advantage(self.trunk(state))
+
+    def forward(self, state):
+        return self.head(self.trunk(state))
+
+
+class CNNActor(nn.Module):
+    def __init__(
+        self,
+        state_dim,
+        action_dim,
+        hidden_dim: int = 128,
+        n_layers: int = 2):
+        super().__init__()
+        self.trunk = CNNTrunk(state_dim)
+        self.head = MLPNetwork((self.trunk.cnn_out_dim, ), action_dim, hidden_dim, n_layers)
+
+    def forward_with_inter(self, state):
+        return self.head.forward_with_inter(self.trunk(state))
+
+    def forward(self, state):
+        return self.head(self.trunk(state))
 
 
 class TransitionModel(nn.Module):
@@ -120,9 +155,6 @@ class TransitionModel(nn.Module):
         next_state_pred = self.net(stacked_imgs)
         return next_state_pred
 
-class TransformerHead(nn.Module):
-    def __init__(self):
-        pass
 
 class MLPValueNetwork(nn.Module):
     def __init__(self,
@@ -226,20 +258,25 @@ class DQN(nn.Module):
         for i in range(1, self.args.n_step):
             self.gamma_sums[i] = self.args.gamma ** i + self.gamma_sums[i-1]
         print(self.gamma_sums)
+
     def _init_networks(self):
         if len(self.state_dim) == 1:
             self.q_net = MLPValueNetwork(self.state_dim, self.action_dim, self.args.hidden_dim, self.args.n_layers).to(self.device)
             self.actor = MLPNetwork(self.state_dim, self.action_dim, self.args.hidden_dim, self.args.n_layers).to(self.device)
-            self._state_disc = StateDiscriminator(self.args.hidden_dim, self.args.hidden_dim).to(self.device)
-            self._state_adv_disc= StateDiscriminator(self.args.hidden_dim, self.args.hidden_dim).to(self.device)
-            self._state_actor_disc = StateDiscriminator(self.args.hidden_dim, self.args.hidden_dim).to(self.device)
 
         else:
-            self.q_net = CNNValueNetwork(self.state_dim, self.state_dim).to(self.device)
-            self.transforms = v2.Compose([
-                v2.RandomResizedCrop(size=(self.state_dim[1], self.state_dim[2]), antialias=True),
-                v2.ColorJitter(0.05, 0.05, 0.05, 0.05)
-            ])
+            self.actor = CNNActor(self.state_dim, self.action_dim, self.args.hidden_dim, self.args.n_layers).to(self.device)
+            self.q_net = CNNValueNetwork(self.state_dim, self.action_dim, hidden_dim=self.args.hidden_dim).to(self.device)
+            # self.transforms = v2.Compose([
+            #     v2.RandomResizedCrop(size=(self.state_dim[1], self.state_dim[2]), antialias=True),
+            #     v2.ColorJitter(0.05, 0.05, 0.05, 0.05)
+            # ])
+       
+
+        self._state_disc = StateDiscriminator(self.args.hidden_dim, self.args.hidden_dim).to(self.device)
+        self._state_adv_disc= StateDiscriminator(self.args.hidden_dim, self.args.hidden_dim).to(self.device)
+        self._state_actor_disc = StateDiscriminator(self.args.hidden_dim, self.args.hidden_dim).to(self.device)
+
         self.q_net_tgt = copy.deepcopy(self.q_net)
         # TODO: FORGOT TO ADD self._state_adv_disc
         self.optimizer = Adam(
@@ -330,14 +367,22 @@ class DQN(nn.Module):
             self.reset_networks()
             did_reset = True
 
-        next_states_latent = self.q_net.trunk(next_states)
+        if len(self.state_dim) == 1:
+            next_states_latent = self.q_net.trunk(next_states)
+        else:
+            next_states_latent, next_states_adv_latent = self.q_net.get_state_latents(next_states)
+            # print("next_states_latent", next_states_latent[:3, :5])
+            # print("next_states_adv_latent", next_states_adv_latent[:3, :5])
+
         apt_reward = compute_apt_reward(next_states_latent, next_states_latent, self.args, self.rms)
         # Scale to account for n-step
         apt_reward = apt_reward * self.gamma_sums[n_steps-1]
 
         q_vals, td_targets, state_latent, state_adv_latent = self.get_val_preds(states, actions, rewards + self.args.apt_reward_lam * apt_reward, next_states, dones, n_steps)
 
-        next_states_adv_latent = self.q_net.advantage_trunk(self.q_net.trunk(next_states))
+        if len(self.state_dim) == 1:
+            next_states_adv_latent = self.q_net.advantage_trunk(self.q_net.trunk(next_states))
+
 
         # if len(self.state_dim) > 1 and self.args.spr_lam > 0.0:
         #     spr_loss = self.compute_spr_loss(state_seq, action_seq)
@@ -393,7 +438,11 @@ class DQN(nn.Module):
             action_distr = (q_vals /self.args.q_val_dist_temp).softmax(dim=-1)
 
         actor_preds, state_latent = self.actor.forward_with_inter(state)
-        next_states_latent = self.actor.trunk(next_states)
+        if len(self.state_dim) == 1:
+            next_states_latent = self.actor.trunk(next_states)
+        else:
+            next_states_latent = self.actor.head.trunk(self.actor.trunk(next_states))
+
         if self._update_iter % 4096 == 0:
             print("q_vals", q_vals[:5])
             print("QVAL action_distr:", action_distr[:5], action_distr.shape)

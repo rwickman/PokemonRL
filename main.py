@@ -3,6 +3,15 @@ import argparse, os
 
 import pygame
 import time
+from datetime import datetime
+
+
+def update_step(agent, writer, train_iter):
+    loss, actor_loss, contrastive_loss, did_reset = agent.update()
+    writer.add_scalar("Loss/value", loss.item(), train_iter)
+    writer.add_scalar("Loss/actor_loss", actor_loss.item(), train_iter)
+    writer.add_scalar("Loss/contrastive_loss", contrastive_loss.item(), train_iter)
+    return did_reset
 
 def main(args):
     if not os.path.exists(args.save_dir):
@@ -31,12 +40,12 @@ def main(args):
     #       gym_env.action_space.n)
     suffix = "_betanstep_cv_dueling"
 
-    env = gym.make(env_name, render_mode=args.render_mode)
+    env = gym.make(args.env, render_mode=args.render_mode)
     agent = DQNAgent(
           args,
           env.observation_space.shape,
           env.action_space.n)
-    suffix = "_slowincbeta_actornet"
+    suffix = "_dueling_dist"
 
     # Reset should only be called with the seed once
     env.reset(seed=args.seed)
@@ -47,7 +56,8 @@ def main(args):
         # print(env.observation_space.shape)
         # screen = pygame.display.set_mode((env.observation_space.shape[2], env.observation_space.shape[1]))
     else:
-        writer = SummaryWriter(comment=f"_{env_name}_nstep_{args.n_step}_buffer_{args.replay_buffer_size}_sprlam_{args.spr_lam}_BufferEps_{args.buffer_episodes}_actor_temp_decay_steps_{args.actor_temp_decay_steps}_actor_temp_final_{args.actor_temp_final}{suffix}")
+        current_time = datetime.now().strftime("%b%d_%H-%M-%S")
+        writer = SummaryWriter(f"./lunar_runs_new/{current_time}_{args.env}_nstep_{args.n_step}_buffer_{args.replay_buffer_size}_BufferEps_{args.buffer_episodes}_actor_temp_decay_steps_{args.actor_temp_decay_steps}_actor_temp_final_{args.actor_temp_final}_qvaltemp_{args.q_val_dist_temp}_contrastivelam_{args.contrastive_lam}{suffix}")
         train_iter = 0
     for ep_idx in range(args.num_episodes):
         done = terminated = False
@@ -94,12 +104,15 @@ def main(args):
         if args.render_mode != "human":             
             agent.add_episode(ep_dict)
             if ep_idx >= 50 and ep_idx % 10 == 0:
+                did_reset = False
                 for _ in range(50):
-                    loss, actor_loss, contrastive_loss = agent.update()
                     train_iter += 1
-                    writer.add_scalar("Loss/value", loss.item(), train_iter)
-                    writer.add_scalar("Loss/actor_loss", actor_loss.item(), train_iter)
-                    writer.add_scalar("Loss/contrastive_loss", contrastive_loss.item(), train_iter)
+                    did_reset = update_step(agent, writer, train_iter) or did_reset
+                if did_reset:
+                    for _ in range(args.ramp_up_updates):
+                        train_iter += 1
+                        update_step(agent, writer, train_iter) or did_reset
+
 
 
             if ep_idx >= 50:
@@ -121,6 +134,8 @@ def main(args):
 
 if __name__ == "__main__":
         parser = argparse.ArgumentParser()
+        parser.add_argument("--env", type=str, default="LunarLander-v2",
+            help="Environment to run.")
         parser.add_argument("--seed", type=int, default=100,
             help="Seed used for reproducibility.")
         parser.add_argument("--save_dir", default="models/",
@@ -138,7 +153,6 @@ if __name__ == "__main__":
             help="Number of parameters in the hidden dimension.")
         parser.add_argument("--n_layers", type=int, default=2,
             help="Number of layers.")
-
         parser.add_argument("--lr", type=float, default=3e-4,
             help="Learning rate used for updating the models.")
         parser.add_argument("--actor_lr", type=float, default=1e-4,
@@ -149,6 +163,9 @@ if __name__ == "__main__":
             help="Final temperature used for control.")
         parser.add_argument("--actor_temp_decay_steps", type=int, default=10000,
             help="Number of steps before the temperature decays to final")
+        parser.add_argument("--q_val_dist_temp", type=float, default=0.2,
+            help="Temperature used for the target q-value distribution.")
+
         parser.add_argument("--contrastive_lam", type=float, default=0.01,
             help="Loss use for contrastive loss.")
 
@@ -166,7 +183,7 @@ if __name__ == "__main__":
             help="Maximum size of the replay buffer.")
         parser.add_argument("--batch_size", type=int, default=64,
             help="Batch size for training the model.")
-        parser.add_argument("--n_step", type=int, default=1,
+        parser.add_argument("--n_step", type=int, default=10,
             help="Numner of steps used for multi-step learning.")
         parser.add_argument("--spr_lam", type=float, default=0.0,
             help="Lambda for SPR loss.")
@@ -174,4 +191,18 @@ if __name__ == "__main__":
             help="Number of steps for SPR loss to forecast into the future.")
         parser.add_argument("--buffer_episodes", type=int, default=30,
             help="Number of episodes to store in the episode buffer.")
+        parser.add_argument("--network_reset_step", type=int, default=100000,
+            help="Number of updates before resetting the networks.")
+        parser.add_argument("--ramp_up_updates", type=int, default=100,
+            help="Number of network updates to perform after resetting to ramp up.")
+        parser.add_argument("--reset_tgt_tau", type=float, default=0.5,
+            help="Percentage of parameters from target network to preserve.")
+        parser.add_argument("--reset_temp_offset", type=float, default=0.2,
+            help="Add offset to actor temperature to explore more after resetting.")
+        parser.add_argument("--knn_k", type=int, default=8,
+            help="KNN k for APT.")
+        parser.add_argument("--knn_clip", type=float, default=0.0005,
+            help="KNN Clip value.")
+        parser.add_argument("--apt_reward_lam", type=float, default=0.1,
+            help="Scaling on the APT reward.")
         main(parser.parse_args())
